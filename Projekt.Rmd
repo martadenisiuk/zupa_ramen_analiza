@@ -1,0 +1,579 @@
+---
+title: "Projekt"
+author: "Marta Denisiuk"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Zbiór danych i biblioteki
+
+Żródło danych: https://www.kaggle.com/residentmario/ramen-ratings
+
+```{r,warning=FALSE, message=FALSE}
+library(plyr)
+library(dplyr)
+library(countrycode)
+library(ggplot2)
+library(viridis) 
+library(ggthemes)
+library(gridExtra)
+library(ggpubr)
+library(grid)
+library(stringr)
+library(car)
+library(nortest)
+library(stats)
+library(userfriendlyscience)
+library(RVAideMemoire)
+library(corrplot)
+library(ggridges)
+```
+
+
+```{r}
+read.csv('ramen-ratings.csv') -> ramen
+```
+
+Zbiór danych zawiera informacje o ramenie. Większość zmiennych są zmiennymi kategorycznymi, jedna zmienna jest ilościowa - ocena danego ramenu. Celami badawczymi były: 
+
+* Na którym koentynencie najłatwiej znaleźć dobry ramen? Zależność oceny od kontynentu.
+
+* Czy miejsce geograficzne tworzy upodobanie względem rodzaju podawania ramenu?
+
+* Wpływ najczęstszych cech ramenu na ocenę -> czyli jak bardzo ramen z kurczakiem, ostry lub z wołowiną smakuje?
+
+*Czy duże korporacje osiągają te same wyniki recenzji na różnych kontynentach?
+
+**Zmienne**
+
+zmienna   opis
+--------  ----
+`Review`     Numer recenzji dań
+`Brand`    Firma 
+`Variety`      Nazwa dania
+`Style`     rodzaj opakowania w którym podawane jest danie
+`Country`     Kraj/Stan/Miasto w którym jest danie
+`Stars`  Ocena
+`Top.Ten`    Top 10 dań w latach 2012 - 2016
+
+```{r,echo=FALSE, results='hide'}
+head(ramen)
+```
+
+Pierwszym krokiem jest czyszczenie danych oraz tworzenie nowych zmiennych. Aby wyciągnąć wnioski z naszych danych tworzymy zmienną Continent oraz StarsInterval odpowiadającą za przedziały ocen. Połączyłyśmy obie Ameryki w jedność, ze względu na małą liczebność Ameryki Południowej.
+
+```{r, message = FALSE, warning = FALSE}
+unique(ramen$Country)
+ramen$Country[ramen$Country == 'United States'] <- 'USA'
+ramen$Continent <- countrycode(sourcevar = ramen[, "Country"],
+                            origin = "country.name",
+                            destination = "continent")
+ramen$Continent[ramen$Country == 'Dubai'] <- 'Asia'
+ramen$Continent[ramen$Country == 'Holland'] <- 'Europe'
+ramen$Continent[ramen$Country == 'Sarawak'] <- 'Asia'
+unique(ramen$Continent)
+
+ramen$StarsInterval <- c("0-1", "1-2", "2-3", "3-4",
+                         "4-5")[findInterval(as.numeric(as.character(ramen$Stars)) ,
+                                             c(0, 1, 2, 3, 4, Inf) )]
+```
+
+Usuwamy puste wiersze.
+
+```{r}
+unique(ramen$Style)
+ramen <- ramen[ramen$Style != "",]
+sort(unique(ramen$Stars))
+ramen <- ramen[ramen$Stars != 'Unrated',]
+round(as.numeric(ramen$Stars),2) -> ramen$Stars
+revalue(ramen$Brand, c("A-One"="A1")) -> ok
+```
+
+W oryginalnym zbiorze mamy zmienną Variety która zawiera nazwy potraw. W poniższym kodzie na podstawie tej zmiennej tworzymy zbiór słów określających ramen i ich liczebność. 
+
+```{r, warning=FALSE}
+#Budujemy listę składników z nazw dań
+strsplit(ramen$Variety, ' ') -> variety # rozdzielamy wyrazy w każdej nazwie
+mark <- c() # lista składników
+for (i in 1:length(variety)){
+  for (j in 1:length(variety[[i]])){    # zmiana list w liście na jedną listę
+    mark <- c(mark, variety[[i]][[j]])
+  }
+}
+mark <- gsub("\\(|\\)|\\[|\\]","",mark) # usuwanie znakóW
+mark <- sub(' ','',mark)
+specified <- c('noodles','noodle','flavour','artificial','ramen','instant','flavor',
+               'sauce','cup','bowl','rice', 'with', 
+               'a','the','soup','men','la','i','the','-',
+               'y','in','ly','de','&','mi','no') #lista zbędnych słóW
+tolower(mark) -> mark
+mark[! mark %in% specified] -> mark # usuwanie słów
+table(mark) -> mark.table # zliczenie każdego słowa
+as.data.frame(mark.table) -> mark.table # ramka danych składników
+arrange(mark.table,-Freq) -> mark.table # sortowanie po ilości składników
+which(is.na(str_detect(tolower(ramen$Variety[i]), 
+                       as.character(mark.table$mark)))) -> error
+mark.table$mark[error]
+mark.table <- mark.table[-c(error),]
+head(mark.table, 10)
+```
+
+Dzięki temu, możemy teraz do naszego orginalnego zbioru danych dodać zmienną Mark która przypisze każdemu wierszowi cechę która jest najczęstsza ogółem. Możemy wnioskować również, że są to cechy najważniejsze, które wpływają również na smak, a co za tym idzie możliwe, że i na ocenę. Będziemy się temu przyglądać w dalszej części pracy.
+
+```{r}
+for (i in 1:nrow(ramen)){
+  which(str_detect(tolower(ramen$Variety[i]), as.character(mark.table$mark)))[1] -> first
+  ramen$Mark[i] <- as.character(mark.table$mark[first])
+}
+```
+
+Sprawdzamy jakiego typu są nasze zmienne.
+
+```{r}
+glimpse(ramen)
+```
+
+Widzimy, że parę zmiennych musimy ustawić na kategoryczne aby uzyskać nasze cele badawcze.
+
+
+```{r}
+as.factor(ramen$Style) -> ramen$Style
+as.factor(ramen$Country) -> ramen$Country
+as.factor(ramen$StarsInterval) -> ramen$StarsInterval
+as.factor(ramen$Brand) -> ramen$Brand
+as.factor(ramen$Mark) -> ramen$Mark
+glimpse(ramen)
+```
+
+Teraz wszystko jest poprawione. Okazało się, że musiałyśmy wprowadzić sporo poprawek, jak i utworzyć nowe zmienne aby mieć ciekawe badania. Teraz przejdziemy do II części projektu - eksploracji danych i wyciąganiu wniosków. Do każdego przedstawionego wcześniej podpunktu utworzyłyśmy wykresy które zawierają długi kod. Aby praca była bardziej przejrzysta i estetyczna postanowiłyśmy je ukryć w pliku PDF. Kody wykresów które nie były skomplikowane zostawiłyśmy.
+
+# Badania
+
+Na początek sprawdzimy czy nasza zmienna Stars pochodzi z rozkładu normalnego. W tym celu, posłużymy się testem Lielleforsa’a który jest oparty na teście Kołmogorowa-Smirnova. Sprawdza hipotezę zerową wskazującą na rozkład zbliżony do rozkładu normalnego. Wartości p > 0.05 potwierdzają spełnienie
+założenia o rozkładzie normalnym.
+
+```{r}
+lillie.test(ramen$Stars)
+```
+
+Wynik wyszedł p = 0 a więc odrzucamy hipotezę zerową na rzecz hipotezy alternatywnej, czyli nie są. 
+
+W takim razie zobaczmy też jak układają się oceny na histogramie. 
+
+```{r}
+theme = theme_set(theme_minimal())
+theme = theme_update(legend.position="none",legend.title=element_blank(),
+                     panel.grid.major.x=element_blank())
+ggplot(ramen, aes(x=Stars))+
+  geom_histogram(aes(y= ..density..),fill="#69b3a2", color="#e9ecef", alpha=0.9) + 
+  geom_density(alpha=.2,color="darkgreen") + ggtitle("Rates")
+```
+
+Już na pierwszy rzut oka widać, że nie mamy do czynienia z rozkładem normalnym. Statystycy prowadzą spór, czy w różnych modelach np. analizy wariancji konieczne jest spełnienie tego założenia. Zobaczymy co przyniosą kolejne badania. Możemy podejrzewać, że średnia ocen oscyluje pomiędzy 3 a 4. Potwierdzimy to głównymi statystykami przy okazji badająć też inne zmienne.
+
+```{r}
+summary(ramen)
+```
+
+Średnia gwiazd wynosi 3.65. Mimo, że oceny przeważnie są średnie/pozytywne to możemy spotkać negatywne czy nawet z punktacją 0. Widzimy też, że mamy 2580 ocen różnych ramenów w różnych częściach świata. Jeśli chodzi o zmienne porządkowe, to summary przedstawiło nam wartości wszystkie lub te najczęściej występujące. Dzięki temu widzimy które marki są dużymi korporacjami, Azja (jak można było się spodziewać z powodu pochodzenia ramenu) króluje nad kontynentami, kurczak jest najczęstszym słowem w nazwie ramenu, a w opakowaniach występuje duża nierówność w ilości. W krajach widzimy przewagę państw azjatyckich, ale na podium znalazło się również USA.
+
+Możemy również przedstawić dane na wykresach. Z powodu estetyki, oraz z tego, że w dalszych badaniach będziemy skupiać się i tak na najliczniejszyc grupach, przedstawione zostały tylko top z  każdej zmiennej.
+
+```{r, echo = FALSE,fig.width=10, fig.height=5}
+top.plot <- function(data, x, y, name.x, name.y){
+  theme = theme_set(theme_minimal())
+  theme = theme_update(legend.position="none",legend.title=element_blank(), panel.grid.major.x=element_blank())
+  p<-ggplot(data=data, aes(x=x, y=y)) +
+    geom_bar(stat="identity", fill="#015C55")+
+    theme_minimal()+ labs(y=name.y, x = name.x)+geom_text(aes(label=y), vjust=1.6, color="white", size=3.5) + theme(axis.text.x=element_text(angle=90, hjust=1))
+  p
+}
+
+top.countries <- as.data.frame(rev(sort(table(ramen$Country)))[1:10])
+top.countries.plot <- top.plot(top.countries,top.countries$Var1,top.countries$Freq,"Countries","Values") 
+top.countries.plot <- top.countries.plot + facet_grid(. ~ "Top Countries") +
+  theme(strip.background = element_rect(colour="#015C55",fill="#015C55"),
+          strip.text = element_text(size=15, colour="white",hjust = 0))
+
+top.brand <-as.data.frame(rev(sort((table(ramen$Brand))))[1:10])
+top.brand.plot <- top.plot(top.brand,top.brand$Var1,top.brand$Freq,"Brands","Values")
+top.brand.plot <- top.brand.plot + facet_grid(. ~ "Top Brands") +
+  theme(strip.background = element_rect(colour="#015C55",fill="#015C55"),
+          strip.text = element_text(size=15, colour="white",hjust = 0))
+
+top.style<-as.data.frame(rev(sort(table(ramen$Style))))
+top.style.plot <- top.plot(top.style,top.style$Var1,top.style$Freq,"Styles","Values")
+top.style.plot <- top.style.plot + facet_grid(. ~ "Styles") +
+  theme(strip.background = element_rect(colour="#015C55",fill="#015C55"),
+          strip.text = element_text(size=15, colour="white",hjust = 0))
+
+grid.arrange(arrangeGrob(top.brand.plot, top.countries.plot, ncol = 2),heights=.5, widths=.5)
+grid.arrange(arrangeGrob(top.style.plot, ncol = 2),heights=.5, widths=.5)
+```
+
+## Czy na dobry Ramen najłatwiej natrafimy w Azji?
+
+Hipoteza $H_{0}$: Ocena Ramenu nie zależy od kontynentu
+
+Hipoteza $H_{1}$: Ocena Ramenu zależy od kontynentu 
+
+```{r}
+title = "Rate by Continents"
+theme = theme_set(theme_minimal())
+theme = theme_update(legend.position="none",legend.title=element_blank(),
+                     panel.grid.major.x=element_blank())
+boxplot = ggplot(ramen, mapping=aes_string(y = 'Stars', x = 'Continent')) +
+  ggtitle(title) + theme(plot.title = element_text(hjust = 0.5))
+boxplot = boxplot + geom_boxplot(outlier.colour = NULL, 
+                                 aes_string(colour="Continent", fill="Continent")) + 
+  stat_summary(geom = "crossbar", width=0.65, fatten=0, color="white", 
+               fun.data = function(x){ return(c(y=median(x), ymin=median(x), 
+                                                ymax=median(x))) })
+mean.n <- function(x){ return(c(y = median(x)*0.97, label = round(mean(x),2))) }
+boxplot = boxplot + stat_summary(fun.data = mean.n, geom = "text", 
+                                 fun = mean, colour = "black")
+boxplot
+```
+
+Na pierwszy rzut oka widzimy, ze wariancje w poszczególnych grupach wydają się być zbliżone.
+Problem może stanowić Afryka ze względu na małą liczebność i wariancja może nie być zbyt dobrze odzwierciedlona na wykresie. Poniższy wykres przedstawia liczebność każdej grupy. 
+
+```{r, echo = FALSE,fig.height=4.5,fig.width=6}
+fre <- as.data.frame(sort(table(ramen$Continent), decreasing = T))
+fre$Indicator <- round(fre$Freq/sum(fre$Freq),3)
+names(fre)[1:2] <- c("Continent", "Frequency")
+fre$Indicator <- scales::percent(fre$Indicato)
+fre.p <- ggtexttable(fre, rows = NULL, 
+                        theme = ttheme('light'))
+
+ramen$StarsInterval <- c("0-1", "1-2", "2-3", "3-4", "4-5")[findInterval(as.numeric(as.character(ramen$Stars)) , c(0, 1, 2, 3, 4, Inf) )]
+c_table <- table(ramen$Continent)
+c_levels <- names(c_table)[order(c_table, decreasing = T)]
+ramen$Continent <- factor(ramen$Continent, levels = c_levels)
+
+theme = theme_set(theme_minimal())
+theme = theme_update(legend.position="bottom",legend.title=element_text(), panel.grid.major.x=element_blank())
+barplotStyle<- ggplot(ramen, aes(x=Continent, fill=StarsInterval)) + geom_bar() + scale_fill_brewer(palette = "RdBu") + theme(plot.title = element_text(hjust = 0.5))
+ barplotStyle + ggtitle("Style by Continents") + theme(axis.text.x = element_text(angle = 90)) + annotation_custom(ggplotGrob(fre.p), xmin=4, xmax=5, ymin=1300, ymax=1500)+
+  labs(title='Bar chart dla kontynentów z podziałem na skale ocen', subtitle='Ilość', y="Wskaźnik", fill="Skala ocen")
+```
+
+Grupami które będą mają możliwość uzyskania wiarygodnych wyników jest Azja, Ameryka i ewentualnie Europa. Niestety różnice pomiędzy grupami są tak duże, że nie możemy mówić tutaj o równoliczności grup. Mamy też do czynienia z obserwacjami odstającymi (wykresy pudełkowe). Z tego względu podejrzewamy, że w naszym przypadku lepiej sprawdzą się testy nieparametryczne, które nie muszą spełniać tych wymagań. Przydatne są również, kiedy naszą zmienne nasze są porządkowe, a własnie Continent jest taką zmienną. Jednak zanim wykluczymy całkowicie testy parametryczne, spróbujmy przeprowadzić analizę wariancji.
+
+Testem statystycznym jednorodności wariancji jest test Flignera-Killeena oraz test Levene'a.
+
+```{r}
+leveneTest(Stars ~ Continent, ramen)
+fligner.test(Stars ~ Continent, ramen)
+```
+
+Widzimy, że w obu przypadkach p.value $> 0.05$, jednak test Flignera wykazał niewiele większą wartość, a że nasze dane są zaszumione, to w takich przypadkach p.value określa się na poziomie 0.1. Nie mamy wystarczającego dowodu by powiedzieć, że nasze wariancje są jednorodne. A co się stanie jeśli dopasujemy model ANOVA? Sprawdźmy.
+
+
+```{r}
+aov.continent <- aov(Stars ~ Continent, ramen)
+summary(aov.continent)
+```
+
+Test F wykazał istotną zależność pomiędzy średnimi w grupach określonych zmienną
+Continent (tzn. co najmniej jedna ze średnich istotnie odstaje od reszty).
+
+```{r}
+plot(aov.continent)
+```
+
+Pierwszy wykres diagnostyczny pokazuje, iż wariancje w grupach nie są do końca równe. Drugi wykres sprawdza warunek normalności i jak mogliśmy się spodziewać, mamy duże odchyłki - ma ciężkie ogony. Taka wielkość odchyleń może negatywnie wpłynąć na jakość analizy. Sprawdźmy jeszcze podsumowanie tej analizy.
+
+```{r}
+summary.lm(aov.continent)
+```
+
+Wszystkie 4 kontynenty wpływają negatywnie na ocenę w stosunku do Azji. Widzimy, że Afryka (prawdopodobnie ze względu na małą liczebność) nie jest istotna statystycznie. Jednak widzieliśmy na wykresach, że model nie został dobrze dopasowany, więc rozsądne będzie odrzucenie go. W takim wypadku, jak już wcześniej wspomniałyśmy, zajmiemy się testami nieparametrycznymi. 
+
+Odpowiednikiem jednoczynnikowej analizy wariancji będzie test Kruskala-Wallisa. Stosujemy go, gdy chcemy porównać co najmniej trzy grupy pod względem jakiejś zmiennej ilościowej, dokładnie tak jak w przypadku analizy wariancji. 
+
+```{r}
+kruskal.test(Stars ~ Continent, ramen)
+```
+
+Drugim testem nieparametrycznym jest test mediany. 
+
+```{r}
+mood.medtest(Stars~Continent, data=ramen, exact = FALSE)
+```
+
+Czyli mediany są różne na kontynentach.
+
+Wyszedł nam wynik istotny statystycznie, a więc możemy przypuszczać, że conajmniej jedna grupa różni się od innej grupy. Aby dowiedzieć się więcej szczegółów, wykonamy test post-hoc Gamesa-Howella, dla nierównych wariancji, ze względu na to, że nie uzyskaliśmy pełnej zgodności co do tego.
+
+```{r}
+posthocTGH(ramen$Stars,ramen$Continent,method = "games-howell")
+```
+
+Widzimy, że statystycznie istotne są tylko różnice pomiędzy Azją a Ameryką i Azją a Europą. Afryka i Ocenia nie różnią się od siebie i są grupami o bardzo małej liczebności. Dlatego możemy twierdzić, że w Azji po pierwsze jest największa różnorodność co do wyboru ramenu oraz istnieje spore prawdopodobieństwo, że szybko natrafimy na dobry ramen, chociaż testy wykazały jedynie zależność oceny od kontynentu Azja, Europa, Ameryka. Biorąc pod uwagę średnie widzimy, że Azja osiąga najlepszy wynik. Dodałyśmy poniższy wykres składający się z histogramów poszczególnych kontynentów i widzimy, że znowu wygrywa Azja.
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+theme = theme_set(theme_minimal())
+theme = theme_update(legend.position="none",legend.title=element_blank(), panel.grid.major.x=element_blank())
+ggplot(ramen,aes(x = Stars, y = Continent, height=..density.., fill = ..x..))+
+  geom_density_ridges_gradient(scale = 1.9, rel_min_height = 0.01, gradient_lwd = 2.)+ scale_fill_viridis(name = "Temp. [F]", option = "C")+
+  scale_x_continuous(limits = c(1,5))+
+  labs(title='Distribution of reviewers ratings', subtitle='Division due to the continent')+
+  #theme_fivethirtyeight()+
+  theme(legend.position="none", axis.title = element_text(size = 15), axis.text = element_text(size = 14, face = "bold"),
+        axis.line = element_line(size = 0.4))
+```
+
+## Czy kultura, miejsce geograficzne ma wpływ na upodobania "pojdemnikowe"? Czyli zależność rodzaju pojemnika od kontynentu
+
+Hipoteza $H_{0}$: Rodzaj opakowania nie zależy od kontynentu
+
+Hipoteza $H_{1}$: Rodzaj opakowania zależy od kontynentu 
+
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+theme = theme_set(theme_minimal())
+theme = theme_update(legend.position="none",legend.title=element_blank(), panel.grid.major.x=element_blank())
+to_tile <- ramen %>%
+  filter(Style != "") %>%
+  group_by(Continent, Style) %>%
+  summarise(Count = n())
+ggplot(to_tile, aes(Style, Continent)) +
+  geom_tile(aes(fill = Count))+
+  geom_text(aes(label = paste0(round(Count/sum(to_tile$Count) * 100,1), "%")), size = 5.5)+
+  scale_fill_distiller(palette = "Set3")+
+  labs(y = "Continent", x = "Type of Ramen", title = "Procentowe zestawienie rodzaju opakowania ze względu\n na Kontynenty", subtitle='Procent wszystkich ocen')+theme(plot.title = element_text(hjust = 0.5))
+  theme(legend.position = "none", axis.title = element_text(size = 15), axis.line = element_line(size = 0.4),
+        axis.text = element_text(size = 14, face = "bold"))
+```
+
+```{r,echo=FALSE}
+theme = theme_set(theme_minimal())
+theme = theme_update(legend.position="right",legend.title=element_blank(), panel.grid.major.x=element_blank())
+   barplotStyle<- ggplot(ramen, aes(x=Continent, fill=Style)) + geom_bar()+scale_fill_viridis(discrete = T) + theme(plot.title = element_text(hjust = 0.5))
+   barplotStyle + ggtitle("Style by Continents") + theme(axis.text.x = element_text(angle = 90))
+```
+
+Na pierwszy rzut oka, widzimy, że "Pack", "Cup" i "Bowl" są głównymi rodzajami opakowań. 
+
+W tej hipotezie posłużymy się testem niezależności chi-kwadrat. Test ten pozwala ocenić czy zaobserwowany rozkład zależy od drugiej zmiennej.
+
+```{r}
+chisq <- chisq.test(ramen$Style,ramen$Continent,simulate.p.value = TRUE)
+chisq
+```
+
+W naszym przypadku, rzędy(rodzaje pojemników) i kolumny(kontynenty) są statystycznie istotne (odrzucamy hipotezę zerową na rzecz alternatywnej), p.value $<0.05$. Czyli możemy uznać, że są od siebie zależne, teraz pokażemy tylko które opakowanie z którym kontynentem jest najbardziej związane.
+
+
+```{r}
+chisq$observed # nasze wartośći zaobserwowane
+round(chisq$expected,2)  # średnie wartości 
+round(chisq$residuals, 3) # reszty
+corrplot(chisq$residuals, is.cor = FALSE)
+```
+
+Zwizualizowaliśmy reszty testu chi kwadrat na wykresie. Na niebiesko jest zaznaczony pozytywny związek pomiędzy zmiennymi. Przykładowo taki związek mamy pomiędzy Afryką a "Tray", czy np "Cup" a Oceanią. Natomiast negatywny związek, czyli nie ma korelacji to pomiędzy "Box" a Europą, albo "Pack" a Ameryką. Negatywny związek w prostym języku to odpychanie się tych zmiennych od siebie. Czyli jak jedna będzie wzrastać to to nie ma wpływu na wzrost drugiej. Procentowy udział zmiennych:
+
+```{r}
+contrib <- 100*chisq$residuals^2/chisq$statistic
+round(contrib, 3)
+```
+```{r}
+corrplot(contrib, is.cor = FALSE)
+```
+
+
+Względny udział każdej komórki w całkowitym wyniku Chi-kwadrat daje pewne wskazanie charakteru zależności między wierszami i kolumnami tabeli kontyngentów. 
+Możemy zauważyć, że:
+
+* Kolumna "America" jest silnie związana z kategoriami "Tray", "Cup","Pack"
+
+* Kolumna "Europa" jest silnie powiązana z "Bowl" i "Cup"
+
+* Wiersz "Cup" jest połączony z każdym kontynentem prócz Afryka
+
+## Czy cecha ramenu ma wpływ na jego ocenę?
+
+Hipoteza $H_{0}$: Cecha nie wpływa na ocenę
+
+Hipoteza $H_{1}$: Cecha wpływa na ocenę
+
+Wybraliśmy dane z top 5 cechami, aby zminimalizować ilość grup, a jednocześnie mając dużą ilość danych.
+
+```{r}
+ramen.top.mark <- ramen %>% filter_at(vars(Mark), 
+                                      any_vars(. %in% as.character(mark.table[1:5,1])))
+```
+
+Rysujemy wykresy pudełkowe
+
+```{r,echo=FALSE}
+title = "Rate by Mark"
+theme = theme_set(theme_minimal())
+theme = theme_update(legend.position="none",legend.title=element_blank(),
+                     panel.grid.major.x=element_blank())
+boxplot = ggplot(ramen.top.mark, mapping=aes_string(y = 'Stars', x = 'Mark')) +
+  ggtitle(title) + theme(plot.title = element_text(hjust = 0.5))
+boxplot = boxplot + geom_boxplot(outlier.colour = NULL, 
+                                 aes_string(colour="Mark", fill="Mark")) + 
+  stat_summary(geom = "crossbar", width=0.65, fatten=0, color="white", 
+               fun.data = function(x){ return(c(y=median(x), ymin=median(x), 
+                                                ymax=median(x))) })
+mean.n <- function(x){ return(c(y = median(x)*0.97, label = round(mean(x),2))) }
+boxplot = boxplot + stat_summary(fun.data = mean.n, geom = "text", 
+                                 fun = mean, colour = "black")
+boxplot
+```
+
+
+
+```{r}
+leveneTest(Stars ~ Mark, ramen.top.mark)
+fligner.test(Stars ~ Mark, ramen.top.mark)
+```
+
+Widzimy, że p-wartość dla obu testów wyszła duża, a zatem nie odrzucamy hipotezy iż wariancje są jednorodne. Standardowo kolejny nasz krok to dopasowanie modelu ANOVA:
+
+```{r}
+aov.mark <- aov(Stars~Mark, ramen.top.mark)
+summary(aov.mark)
+```
+Test F wykazał istotną zależność pomiędzy średnimi w grupach określonych zmienną Mark.
+
+```{r}
+plot(aov.mark)
+```
+I tak jak to było w przypadku wpływu kontynentu na ocenę, tak tutaj nie mamy do czynienia z rozkładem normalnym. 
+
+```{r}
+summary.lm(aov.mark)
+```
+
+Ponownie używamy testów nieparametrycznych.
+
+```{r}
+kruskal.test(Stars ~ Mark, ramen.top.mark)
+mood.medtest(Stars~Continent, data=ramen, exact = FALSE)
+```
+
+mediany różnią się od siebie, a więc co najmniej jedna grupa różni się od innych. 
+
+```{r}
+as.matrix(as.data.frame(ramen.top.mark)) -> ramen.top.mark
+posthocTGH(as.numeric(ramen.top.mark[,6]),as.factor(ramen.top.mark[,10]),
+           method = "games-howell")
+```
+Głównie chicken różni się od pozostałych, curry z beef też, tom-beef oraz spicy-curry. Możemy stwierdzić, że istnieje prawdopodbieństwo, że ocena zależy od cechy ramenu, chociaż w małym stopniu. 
+
+## Czy duże korporacje osiągają te same wyniki recenzji na różnych kontynentach?
+
+Hipoteza $H_{0}$: Ocena jest zależna od kontynentu
+
+Hipoteza $H_{1}$: Ocena nie jest zależna od kontynentu
+
+Jeżeli dowiedziemy, że są znaczące różnice w średnich miedzy kontynentami, to oznacza, że Nie osiagają tych samych wyników. Na początek wybór danych oraz wykres. Wybieramy dwie firmy z największych: Nissin i Maruchan.
+
+Nonghsim ze nieznanych problemóW  technicznych nie chciało działać, więc wybrałyśmy trzecią firmę. 
+
+```{r,results='hide'}
+aggregate(Variety ~ Brand, ramen, length) -> ramen.values
+ramen.values[order(ramen.values$Variety,decreasing = TRUE),]
+```
+
+```{r}
+ramen[ramen$Brand == "Nissin",] -> nissin
+ramen[ramen$Brand == "Maruchan",] -> nongshim
+ramen.brand <- rbind(nissin, nongshim)
+head(ramen.brand)
+```
+
+```{r}
+title = "Rate by Continents"
+theme = theme_set(theme_minimal())
+theme = theme_update(legend.position="top",legend.title=element_blank(),
+                     panel.grid.major.x=element_blank())
+ggplot(ramen.brand, aes(x = Continent, y = Stars, color = Brand)) +  # ggplot function
+  geom_boxplot()
+```
+Będziemy brać pod uwagę jedynie Azję i Ameryki, ze względu na to, że w Europie nie występuje Nissin.
+
+```{r}
+ramen.brand <- ramen.brand[ramen.brand$Continent %in% c("Asia", "Americas"), ]
+ramen.brand$Brand <- as.factor(as.character(ramen.brand$Brand))
+ramen.brand$Continent <- as.factor(as.character(ramen.brand$Continent))
+```
+
+Przeprowadzamy test na jednolitość wariancji: 
+
+```{r}
+leveneTest(Stars~Continent, ramen.brand %>% filter(Brand == "Nissin"))
+leveneTest(Stars~Continent, ramen.brand %>% filter(Brand == "Maruchan"))
+```
+
+
+W obu grupach p-value jest duże więc nie odrzucamy hipotezy zerowej o jednolitości wariancji.
+
+```{r}
+aov.nissin <- aov(Stars~Continent, ramen.brand %>% filter(Brand == "Nissin"))
+aov.maruchan <- aov(Stars~Continent, ramen %>% filter(Brand == "Maruchan") %>% 
+                      filter(Continent == "Asia"|Continent =="Americas"))
+
+summary(aov.nissin)
+summary(aov.maruchan)
+```
+
+Widzimy, że w przypadku nissin jak i maruchan test F wykazał istotną zależność pomiędzy średnimi w grupach względem kontynentu.
+
+```{r}
+plot(aov.nissin)
+plot(aov.maruchan)
+```
+
+Nie możemy w stanie do końca odczytać z pierwszych wykresów czy wariancje są sobie równe (ale wykazaliśmy to już w poprzednich testach). Zaskakujące może być dla nas to, że drugi wykres przedstawia w obu przypadkach całkiem dobrze dopasowany model liniowy. Odchyłki są niewielkie
+
+```{r}
+summary.lm(aov.nissin)
+```
+
+```{r}
+summary.lm(aov.maruchan)
+```
+
+W firmie nissin Ameryka powoduje spadek oceny o około 0.56. Podobnie dzieje się w firmie maruchan.
+
+Narysujemy teraz wykres interakcji.
+
+```{r}
+interaction.plot(ramen.brand$Continent, ramen.brand$Brand, ramen.brand$Stars)
+```
+
+Czyli w obu firmach kontynent ma wpływ na średnią ocenę ramenu. W Azji odnotowywujemy większe wartości. 
+
+Spróbujmy dopasować dwuczynnikowy model z wszystkimi interakcjami. Spodziewamy się, że Brand nie ma wpływu na ocenę jak to wcześniej było pokazane na wykresach.
+
+```{r}
+twoway.full <- aov(Stars~Continent*Brand, ramen.brand)
+summary(twoway.full)
+```
+
+Nasz test potwierdził, że Brand nie ma wpływu na ocenę ramenu na poszczególnych kontynentach. Nie jesteśmy w takim razie wysnuć wniosku, czy dane firmy dbają o jakość produktu na całym świecie, ponieważ nie ma pomiędzy temu związku.
+
+```{r}
+summary.lm(twoway.full)
+```
+
+Sprawdźmy jeszcze model addytywny. Podejrzewamy, że tak samo jak w poprzednim modelu, nie będziemy w stanie wyciągnąć istotnie statystycznych informacji.
+
+```{r}
+twoway.add <- aov(Stars~Continent+Brand, ramen.brand)
+summary(twoway.add)
+```
+
+Nasze obawy się sprawdziły. Jedynie kontynent ma wpływ na ocenę ramenu. Na poprzednich wykresach pudełkowych widzieliśmy, że Azja istotnie wpływa na wzrost oceny ramenu.
+
+```{r}
+anova(twoway.add, twoway.full)
+```
+
+Ostatecznie potwierdzenie, że żaden model nie jest dobrze dopasowany. 
