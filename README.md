@@ -3,7 +3,7 @@
 ### Opis
 Projekt analizuje dane o ocenach konsumentów zupy ramen z różnych zakątków świata. W projekcie zadane są cztery pytania:
 - Czy na dobry Ramen najłatwiej natrafimy w Azji?
-- Czy kultura, miejsce geograficzne ma wpływ na upodobania “pojdemnikowe”? Czyli zależność rodzaju pojemnika od kontynentu
+- Czy kultura, miejsce geograficzne ma wpływ na upodobania “pojemnikowe”? Czyli zależność rodzaju pojemnika od kontynentu
 - Czy cecha ramenu ma wpływ na jego ocenę?
 - Czy duże korporacje osiągają te same wyniki recenzji na różnych kontynentach?
 
